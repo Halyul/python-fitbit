@@ -550,7 +550,7 @@ class Fitbit(object):
         )
         return self.make_request(url)
 
-    def intraday_time_series(self, resource, base_date='today', detail_level='1min', start_time=None, end_time=None):
+    def intraday_time_series(self, resource, user_id=None, base_date='today', detail_level='1min', start_time=None, end_time=None):
         """
         The intraday time series extends the functionality of the regular time series, but returning data at a
         more granular level for a single day, defaulting to 1 minute intervals. To access this feature, one must
@@ -575,8 +575,8 @@ class Fitbit(object):
         if not detail_level in ['1sec', '1min', '15min']:
             raise ValueError("Period must be either '1sec', '1min', or '15min'")
 
-        url = "{0}/{1}/user/-/{resource}/date/{base_date}/1d/{detail_level}".format(
-            *self._get_common_args(),
+        url = "{0}/{1}/user/{2}/{resource}/date/{base_date}/1d/{detail_level}".format(
+            *self._get_common_args(user_id),
             resource=resource,
             base_date=self._get_date_string(base_date),
             detail_level=detail_level
@@ -799,17 +799,34 @@ class Fitbit(object):
         )
         return self.make_request(url, method="DELETE")
 
-    def get_sleep(self, date):
+    def get_sleep(self, date, user_id=None):
         """
         https://dev.fitbit.com/build/reference/web-api/sleep/get-sleep-log-by-date/
         date should be a datetime.date object.
         TODO: APIVERSION 1.2
         """
-        url = "{0}/{1}/user/-/sleep/date/{year}-{month}-{day}.json".format(
-            *self._get_common_args(),
+        url = "{0}/{1}/user/{2}/sleep/date/{year}-{month}-{day}.json".format(
+            *self._get_common_args(user_id),
             year=date.year,
             month=date.month,
             day=date.day
+        )
+        return self.make_request(url)
+    
+    def get_sleep_log_list(self, date, user_id=None, limit=100):
+        """
+        https://dev.fitbit.com/build/reference/web-api/sleep/get-sleep-log-by-date/
+        date should be a datetime.date object.
+        TODO: APIVERSION 1.2
+        """
+        url = "{0}/{1}/user/{2}/sleep/list.json?beforeDate={year}-{month}-{day}&offset={offset}&limit={limit}&sort={sort}".format(
+            *self._get_common_args(user_id),
+            offset=0,
+            year=date.year,
+            month=date.month,
+            day=date.day,
+            limit=limit,
+            sort="desc"
         )
         return self.make_request(url)
 
