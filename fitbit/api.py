@@ -298,8 +298,8 @@ class Fitbit(object):
         url = "{0}/{1}/user/-/profile.json".format(*self._get_common_args())
         return self.make_request(url, data)
 
-    def _get_common_args(self, user_id=None):
-        common_args = (self.API_ENDPOINT, self.API_VERSION,)
+    def _get_common_args(self, user_id=None, api_version=API_VERSION):
+        common_args = (self.API_ENDPOINT, api_version,)
         if not user_id:
             user_id = '-'
         common_args += (user_id,)
@@ -529,7 +529,6 @@ class Fitbit(object):
 
         https://dev.fitbit.com/build/reference/web-api/sleep/get-sleep-log-by-date-range/
         https://dev.fitbit.com/build/reference/web-api/sleep/get-sleep-log-by-date/
-        TODO: APIVERSION 1.2
         """
         if period and end_date:
             raise TypeError("Either end_date or period can be specified, not both")
@@ -542,8 +541,12 @@ class Fitbit(object):
                                  % ','.join(Fitbit.PERIODS))
             end = period
 
+        api_version = self.API_VERSION
+        if resource == "sleep":
+            api_version = 1.2
+
         url = "{0}/{1}/user/{2}/{resource}/date/{base_date}/{end}.json".format(
-            *self._get_common_args(user_id),
+            *self._get_common_args(user_id, api_version),
             resource=resource,
             base_date=self._get_date_string(base_date),
             end=end
@@ -803,10 +806,9 @@ class Fitbit(object):
         """
         https://dev.fitbit.com/build/reference/web-api/sleep/get-sleep-log-by-date/
         date should be a datetime.date object.
-        TODO: APIVERSION 1.2
         """
         url = "{0}/{1}/user/{2}/sleep/date/{year}-{month}-{day}.json".format(
-            *self._get_common_args(user_id),
+            *self._get_common_args(user_id, 1.2),
             year=date.year,
             month=date.month,
             day=date.day
@@ -817,10 +819,9 @@ class Fitbit(object):
         """
         https://dev.fitbit.com/build/reference/web-api/sleep/get-sleep-log-by-date/
         date should be a datetime.date object.
-        TODO: APIVERSION 1.2
         """
         url = "{0}/{1}/user/{2}/sleep/list.json?beforeDate={year}-{month}-{day}&offset={offset}&limit={limit}&sort={sort}".format(
-            *self._get_common_args(user_id),
+            *self._get_common_args(user_id, 1.2),
             offset=0,
             year=date.year,
             month=date.month,
@@ -830,18 +831,17 @@ class Fitbit(object):
         )
         return self.make_request(url)
 
-    def log_sleep(self, start_time, duration):
+    def log_sleep(self, start_time, duration, user_id=None):
         """
         https://dev.fitbit.com/build/reference/web-api/sleep/create-sleep-log/
         start time should be a datetime object. We will be using the year, month, day, hour, and minute.
-        TODO: APIVERSION 1.2
         """
         data = {
             'startTime': start_time.strftime("%H:%M"),
             'duration': duration,
             'date': start_time.strftime("%Y-%m-%d"),
         }
-        url = "{0}/{1}/user/-/sleep.json".format(*self._get_common_args())
+        url = "{0}/{1}/user/-/sleep.json".format(*self._get_common_args(user_id, 1.2))
         return self.make_request(url, data=data, method="POST")
 
     def activities_list(self):
@@ -939,20 +939,18 @@ class Fitbit(object):
     def get_friends(self, user_id=None):
         """
         https://dev.fitbit.com/build/reference/web-api/friends/get-friends/
-        TODO: APIVERSION 1.1
         """
-        url = "{0}/{1}/user/{2}/friends.json".format(*self._get_common_args(user_id))
+        url = "{0}/{1}/user/{2}/friends.json".format(*self._get_common_args(user_id, 1.1))
         return self.make_request(url)
 
     def get_friends_leaderboard(self, period):
         """
         https://dev.fitbit.com/build/reference/web-api/friends/get-friends-leaderboard/
-        TODO: APIVERSION 1.1
         """
         if not period in ['7d', '30d']:
             raise ValueError("Period must be one of '7d', '30d'")
         url = "{0}/{1}/user/-/friends/leaders/{period}.json".format(
-            *self._get_common_args(),
+            *self._get_common_args(api_version=1.1),
             period=period
         )
         return self.make_request(url)
