@@ -1,0 +1,216 @@
+From 0beeba41c1e994a22511fbdf373ee2e9e326b51a Mon Sep 17 00:00:00 2001
+From: Eric Wolak <github@wolak.net>
+Date: Mon, 18 Jun 2018 18:21:10 -0700
+Subject: [PATCH] Expose Fitbit API rate limit headers
+
+Fitbit's API returns several headers that help clients know how close they are to having their requests denied with an HTTP 429 error. By exposing the rate limiting-related headers as fields on the Fitbit client object, we help consumers make better decisions about how and when to make requests.
+---
+ fitbit/api.py                   | 13 +++++++++++++
+ fitbit/exceptions.py            | 15 +++++++++++++++
+ fitbit_tests/__init__.py        |  2 ++
+ fitbit_tests/test_api.py        | 29 ++++++++++++++++++++++++++++-
+ fitbit_tests/test_exceptions.py |  4 ++++
+ 5 files changed, 62 insertions(+), 1 deletion(-)
+
+diff --git a/fitbit/api.py b/fitbit/api.py
+index ba9d037..d3ef061 100644
+--- a/fitbit/api.py
++++ b/fitbit/api.py
+@@ -1,6 +1,8 @@
+ # -*- coding: utf-8 -*-
+ import datetime
+ import json
++import time
++
+ import requests
+ 
+ try:
+@@ -243,6 +245,9 @@ def __init__(self, client_id, client_secret, access_token=None,
+             setattr(self, '%s_activities' % qualifier, curry(self.activity_stats, qualifier=qualifier))
+             setattr(self, '%s_foods' % qualifier, curry(self._food_stats,
+                                                         qualifier=qualifier))
++        self.rate_limit_remaining = None
++        self.rate_limit_reset = None
++        self.rate_limit_limit = None
+ 
+     def make_request(self, *args, **kwargs):
+         # This should handle data level errors, improper requests, and bad
+@@ -254,6 +259,14 @@ def make_request(self, *args, **kwargs):
+         method = kwargs.get('method', 'POST' if 'data' in kwargs else 'GET')
+         response = self.client.make_request(*args, **kwargs)
+ 
++        if 'fitbit-rate-limit-remaining' in response.headers:
++            self.rate_limit_remaining = int(response.headers.get('fitbit-rate-limit-remaining'))
++        if 'fitbit-rate-limit-limit' in response.headers:
++            self.rate_limit_limit = int(response.headers.get('fitbit-rate-limit-limit'))
++        rate_limit_reset = response.headers.get('fitbit-rate-limit-reset')
++        if rate_limit_reset:
++            self.rate_limit_reset = time.time() + int(rate_limit_reset)
++
+         if response.status_code == 202:
+             return True
+         if method == 'DELETE':
+diff --git a/fitbit/exceptions.py b/fitbit/exceptions.py
+index 677958a..4d3f93c 100644
+--- a/fitbit/exceptions.py
++++ b/fitbit/exceptions.py
+@@ -1,4 +1,5 @@
+ import json
++import time
+ 
+ 
+ class BadResponse(Exception):
+@@ -22,6 +23,20 @@ class Timeout(Exception):
+     pass
+ 
+ 
++class RateLimited(Exception):
++    """
++    Used when the Fitbit API rate limit has been exceeded and a request would cause an HTTP 429 error.
++    """
++
++    def __init__(self, rate_limit_limit, rate_limit_remaining, rate_limit_reset):
++        self.rate_limit_limit = rate_limit_limit
++        self.rate_limit_remaining = rate_limit_remaining
++        self.rate_limit_reset = rate_limit_reset
++        super(RateLimited, self).__init__(
++            "Rate limit of {} requests exhausted. Reset in {:0f} seconds".format(rate_limit_limit,
++                                                                                 rate_limit_reset - time.time()))
++
++
+ class HTTPException(Exception):
+     def __init__(self, response, *args, **kwargs):
+         try:
+diff --git a/fitbit_tests/__init__.py b/fitbit_tests/__init__.py
+index d5f28f7..08b3710 100644
+--- a/fitbit_tests/__init__.py
++++ b/fitbit_tests/__init__.py
+@@ -3,6 +3,7 @@
+ from .test_auth import Auth2Test
+ from .test_api import (
+     APITest,
++    RateLimitTest,
+     CollectionResourceTest,
+     DeleteCollectionResourceTest,
+     ResourceAccessTest,
+@@ -16,6 +17,7 @@ def all_tests(consumer_key="", consumer_secret="", user_key=None, user_secret=No
+     suite.addTest(unittest.makeSuite(ExceptionTest))
+     suite.addTest(unittest.makeSuite(Auth2Test))
+     suite.addTest(unittest.makeSuite(APITest))
++    suite.addTest(unittest.makeSuite(RateLimitTest))
+     suite.addTest(unittest.makeSuite(CollectionResourceTest))
+     suite.addTest(unittest.makeSuite(DeleteCollectionResourceTest))
+     suite.addTest(unittest.makeSuite(ResourceAccessTest))
+diff --git a/fitbit_tests/test_api.py b/fitbit_tests/test_api.py
+index f019d72..f276c90 100644
+--- a/fitbit_tests/test_api.py
++++ b/fitbit_tests/test_api.py
+@@ -1,9 +1,10 @@
++import time
+ from unittest import TestCase
+ import datetime
+ import mock
+ import requests
+ from fitbit import Fitbit
+-from fitbit.exceptions import DeleteError, Timeout
++from fitbit.exceptions import DeleteError, Timeout, RateLimited
+ 
+ URLBASE = "%s/%s/user" % (Fitbit.API_ENDPOINT, Fitbit.API_VERSION)
+ 
+@@ -82,6 +83,7 @@ def test_make_request(self):
+         mock_response = mock.Mock()
+         mock_response.status_code = 200
+         mock_response.content = b"1"
++        mock_response.headers = {}
+         with mock.patch.object(self.fb.client, 'make_request') as client_make_request:
+             client_make_request.return_value = mock_response
+             retval = self.fb.make_request(*ARGS, **KWARGS)
+@@ -97,6 +99,7 @@ def test_make_request_202(self):
+         mock_response = mock.Mock()
+         mock_response.status_code = 202
+         mock_response.content = "1"
++        mock_response.headers = {}
+         ARGS = (1, 2)
+         KWARGS = {'a': 3, 'b': 4, 'Accept-Language': self.fb.system}
+         with mock.patch.object(self.fb.client, 'make_request') as client_make_request:
+@@ -110,6 +113,7 @@ def test_make_request_delete_204(self):
+         mock_response = mock.Mock()
+         mock_response.status_code = 204
+         mock_response.content = "1"
++        mock_response.headers = {}
+         ARGS = (1, 2)
+         KWARGS = {'a': 3, 'b': 4, 'method': 'DELETE', 'Accept-Language': self.fb.system}
+         with mock.patch.object(self.fb.client, 'make_request') as client_make_request:
+@@ -123,6 +127,7 @@ def test_make_request_delete_not_204(self):
+         mock_response = mock.Mock()
+         mock_response.status_code = 205
+         mock_response.content = "1"
++        mock_response.headers = {}
+         ARGS = (1, 2)
+         KWARGS = {'a': 3, 'b': 4, 'method': 'DELETE', 'Accept-Language': self.fb.system}
+         with mock.patch.object(self.fb.client, 'make_request') as client_make_request:
+@@ -130,6 +135,28 @@ def test_make_request_delete_not_204(self):
+             self.assertRaises(DeleteError, self.fb.make_request, *ARGS, **KWARGS)
+ 
+ 
++class RateLimitTest(TestBase):
++    """
++    Test how make_request interacts with Fitbit API's rate-limiting headers
++    """
++
++    def test_updates_parameters_from_request(self):
++        mock_response = mock.Mock()
++        mock_response.status_code = 200
++        mock_response.content = b"1"
++        mock_response.headers = {
++            'fitbit-rate-limit-limit': '150',
++            'fitbit-rate-limit-remaining': '149',
++            'fitbit-rate-limit-reset': '1801',
++        }
++        with mock.patch.object(self.fb.client, 'make_request') as client_make_request:
++            client_make_request.return_value = mock_response
++            self.fb.make_request('x')
++        self.assertEqual(150, self.fb.rate_limit_limit)
++        self.assertEqual(149, self.fb.rate_limit_remaining)
++        self.assertAlmostEqual(time.time() + 1801, self.fb.rate_limit_reset, places=0)
++
++
+ class CollectionResourceTest(TestBase):
+     """ Tests for _COLLECTION_RESOURCE """
+     def test_all_args(self):
+diff --git a/fitbit_tests/test_exceptions.py b/fitbit_tests/test_exceptions.py
+index d43b656..8d61142 100644
+--- a/fitbit_tests/test_exceptions.py
++++ b/fitbit_tests/test_exceptions.py
+@@ -27,6 +27,7 @@ def test_response_ok(self):
+         r = mock.Mock(spec=requests.Response)
+         r.status_code = 200
+         r.content = b'{"normal": "resource"}'
++        r.headers = {}
+ 
+         f = Fitbit(**self.client_kwargs)
+         f.client._request = lambda *args, **kwargs: r
+@@ -73,6 +74,7 @@ def test_response_error(self):
+         """
+         r = mock.Mock(spec=requests.Response)
+         r.content = b'{"normal": "resource"}'
++        r.headers = {}
+ 
+         self.client_kwargs['oauth2'] = True
+         f = Fitbit(**self.client_kwargs)
+@@ -116,6 +118,7 @@ def test_serialization(self):
+         r = mock.Mock(spec=requests.Response)
+         r.status_code = 200
+         r.content = b"iyam not jason"
++        r.headers = {}
+ 
+         f = Fitbit(**self.client_kwargs)
+         f.client._request = lambda *args, **kwargs: r
+@@ -128,6 +131,7 @@ def test_delete_error(self):
+         r = mock.Mock(spec=requests.Response)
+         r.status_code = 201
+         r.content = b'{"it\'s all": "ok"}'
++        r.headers = {}
+ 
+         f = Fitbit(**self.client_kwargs)
+         f.client._request = lambda *args, **kwargs: r

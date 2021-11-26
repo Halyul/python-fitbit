@@ -1,0 +1,73 @@
+From 95233730b1096afcff5514b363da1ab19b0d3670 Mon Sep 17 00:00:00 2001
+From: Eric Wolak <github@wolak.net>
+Date: Mon, 18 Jun 2018 18:23:49 -0700
+Subject: [PATCH] Don't make API requests that would be throttled with an HTTP
+ 429
+
+Fitbit gives us enough information in HTTP response headers to know when the next request would be refused with an HTTP 429 response due to rate limiting. Instead of making that request, we can avoid it and throw an informative error message to consumers.
+---
+ fitbit/api.py            |  6 ++++++
+ fitbit_tests/test_api.py | 33 +++++++++++++++++++++++++++++++++
+ 2 files changed, 39 insertions(+)
+
+diff --git a/fitbit/api.py b/fitbit/api.py
+index d3ef061..88e2a0d 100644
+--- a/fitbit/api.py
++++ b/fitbit/api.py
+@@ -257,6 +257,12 @@ def make_request(self, *args, **kwargs):
+         kwargs['headers'] = headers
+ 
+         method = kwargs.get('method', 'POST' if 'data' in kwargs else 'GET')
++
++        if (self.rate_limit_remaining is not None and
++                self.rate_limit_remaining == 0 and
++                time.time() < self.rate_limit_reset):
++            raise exceptions.RateLimited(self.rate_limit_limit, self.rate_limit_remaining, self.rate_limit_reset)
++
+         response = self.client.make_request(*args, **kwargs)
+ 
+         if 'fitbit-rate-limit-remaining' in response.headers:
+diff --git a/fitbit_tests/test_api.py b/fitbit_tests/test_api.py
+index f276c90..a3ea6d6 100644
+--- a/fitbit_tests/test_api.py
++++ b/fitbit_tests/test_api.py
+@@ -156,6 +156,39 @@ def test_updates_parameters_from_request(self):
+         self.assertEqual(149, self.fb.rate_limit_remaining)
+         self.assertAlmostEqual(time.time() + 1801, self.fb.rate_limit_reset, places=0)
+ 
++    def test_refuses_requests_that_will_be_throttled(self):
++        mock_response = mock.Mock()
++        mock_response.status_code = 200
++        mock_response.content = b"1"
++        mock_response.headers = {}
++
++        self.fb.rate_limit_limit = 150
++        self.fb.rate_limit_reset = time.time() + 100
++        self.fb.rate_limit_remaining = 1
++
++        # Happy path where we shouldn't be rejected
++        with mock.patch.object(self.fb.client, 'make_request') as client_make_request:
++            client_make_request.return_value = mock_response
++            self.fb.make_request('x')
++
++        # Failure case where we expect a rejection
++        self.fb.rate_limit_remaining = 0
++        try:
++            self.fb.make_request('x')
++            self.fail("Expected fitbit.exceptions.RateLimited to be thrown")
++        except RateLimited as rl:
++            self.assertEqual(150, rl.rate_limit_limit)
++            self.assertEqual(0, rl.rate_limit_remaining)
++            self.assertAlmostEqual(time.time() + 100, rl.rate_limit_reset, places=0)
++
++        # Happy path where remaining is zero, but reset is in the past
++        self.fb.rate_limit_reset = time.time() - 100
++        self.fb.rate_limit_remaining = 1
++
++        with mock.patch.object(self.fb.client, 'make_request') as client_make_request:
++            client_make_request.return_value = mock_response
++            self.fb.make_request('x')
++
+ 
+ class CollectionResourceTest(TestBase):
+     """ Tests for _COLLECTION_RESOURCE """
