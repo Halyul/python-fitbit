@@ -841,7 +841,7 @@ class Fitbit(object):
             'duration': duration,
             'date': start_time.strftime("%Y-%m-%d"),
         }
-        url = "{0}/{1}/user/-/sleep.json".format(*self._get_common_args(user_id, 1.2))
+        url = "{0}/{1}/user/{2}/sleep.json".format(*self._get_common_args(user_id, 1.2))
         return self.make_request(url, data=data, method="POST")
 
     def activities_list(self):
